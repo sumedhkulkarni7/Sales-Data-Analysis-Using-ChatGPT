@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interactive Sales Performance Dashboard</title>
+  <style>
+    :root{--bg:#0f172a;--card:#0b1220;--muted:#94a3b8;--accent:#3b82f6}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,#07112a 0%, #081428 100%);color:#e6eef8;padding:16px}
+    .topbar{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+    .brand{font-weight:700;font-size:18px}
+    .controls{margin-left:auto;display:flex;gap:8px;align-items:center}
+    .file-input{background:var(--card);padding:8px;border-radius:8px}
+    .file-input input{color:inherit}
+    .container{display:grid;grid-template-columns:320px 1fr;gap:12px}
+    .sidebar{background:rgba(255,255,255,0.03);padding:12px;border-radius:10px;min-height:70vh}
+    .main{display:grid;grid-template-rows:120px 1fr;gap:12px}
+    .kpis{display:flex;gap:12px}
+    .kpi{flex:1;background:rgba(255,255,255,0.03);padding:12px;border-radius:8px}
+    .kpi .value{font-size:20px;font-weight:700}
+    .charts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .chart-card{background:rgba(255,255,255,0.03);padding:8px;border-radius:8px;min-height:220px}
+    .fullwidth{grid-column:1/-1}
+    select,button{background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.06);padding:6px;border-radius:6px}
+    .muted{color:var(--muted);font-size:13px}
+    footer{margin-top:12px;color:var(--muted);font-size:12px}
+    @media (max-width:1000px){.container{grid-template-columns:1fr} .charts{grid-template-columns:1fr} .sidebar{order:2}}
+  </style>
+  <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">Interactive Sales Performance Dashboard</div>
+    <div class="muted">Upload JSON sales data (array of objects) — fields: Order Date, Ship Date, Region, Category, Sub-Category, Sales, Profit, Discount, Quantity, Customer Name, Segment, State, City</div>
+    <div class="controls">
+      <label class="file-input">
+        📁 Upload JSON
+        <input id="file" type="file" accept="application/json" />
+      </label>
+      <select id="yearFilter"><option value="all">All years</option></select>
+      <select id="segmentFilter"><option value="all">All segments</option></select>
+      <button id="resetBtn">Reset Filters</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="sidebar">
+      <h3>Filters & Info</h3>
+      <div id="info" class="muted">No data loaded.</div>
+      <hr />
+      <div>
+        <strong>Instructions</strong>
+        <ol class="muted">
+          <li>Click <em>Upload JSON</em> and choose your local JSON file (array of records).</li>
+          <li>Use Year / Segment filters or click slices/bars to cross-filter charts.</li>
+          <li>Click a pie slice to filter; double-click the canvas to clear selection.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="kpis">
+        <div class="kpi" id="kpi-sales"><div class="muted">Total Sales</div><div class="value" id="totalSales">-</div></div>
+        <div class="kpi" id="kpi-profit"><div class="muted">Total Profit</div><div class="value" id="totalProfit">-</div></div>
+        <div class="kpi" id="kpi-margin"><div class="muted">Profit Margin</div><div class="value" id="profitMargin">-</div></div>
+        <div class="kpi" id="kpi-orders"><div class="muted">Total Orders</div><div class="value" id="totalOrders">-</div></div>
+      </div>
+
+      <div class="charts fullwidth">
+        <div class="chart-card" id="timeSeries"></div>
+        <div class="chart-card" id="regionPie"></div>
+        <div class="chart-card" id="categoryTreemap"></div>
+        <div class="chart-card" id="segmentPie"></div>
+        <div class="chart-card" id="topCustomers"></div>
+        <div class="chart-card" id="discountScatter"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <footer>Built with Plotly.js • Upload a JSON file to populate the dashboard.</footer>
+
+  <script>
+    // Utilities
+    function tryParseNumber(v){const n=Number(v);return isNaN(n)?0:n}
+
+    function parseDateFlexible(s){
+      if(!s) return null;
+      if(s instanceof Date) return s;
+      s = String(s).trim();
+      // Try ISO
+      let d = new Date(s);
+      if(!isNaN(d)) return d;
+      // Split digits
+      const parts = s.split(/[^0-9]+/).filter(Boolean);
+      if(parts.length===3){
+        let [a,b,c]=parts.map(Number);
+        // if a>31 assume year-first, etc.
+        if(a>31){ // YYYY MM DD
+          return new Date(a,b-1,c);
+        }
+        // try dd-mm-yyyy (if c>31 then maybe mm/dd/yyyy)
+        if(c>31){ // unlikely
+          return new Date(c,b-1,a);
+        }
+        // if a>12 assume day-first
+        if(a>12) return new Date(c,b-1,a);
+        // otherwise ambiguous: assume day-first
+        return new Date(c,b-1,a);
+      }
+      return null;
+    }
+
+    // Dashboard state
+    let rawData = [];
+    let filtered = [];
+    let activeFilters = {year:'all', segment:'all', region:null};
+
+    const fileInput = document.getElementById('file');
+    const yearFilter = document.getElementById('yearFilter');
+    const segmentFilter = document.getElementById('segmentFilter');
+    const resetBtn = document.getElementById('resetBtn');
+    const infoEl = document.getElementById('info');
+
+    fileInput.addEventListener('change', async (e)=>{
+      const f = e.target.files && e.target.files[0];
+      if(!f) return;
+      try{
+        const txt = await f.text();
+        const json = JSON.parse(txt);
+        if(!Array.isArray(json)) throw new Error('JSON must be an array of records');
+        rawData = json.map((r,idx)=>{
+          const d = parseDateFlexible(r['Order Date'] || r['OrderDate'] || r.order_date || r.orderDate);
+          return Object.assign({}, r, {
+            __parsedDate: d,
+            Sales: tryParseNumber(r.Sales ?? r.sales),
+            Profit: tryParseNumber(r.Profit ?? r.profit),
+            Discount: tryParseNumber(r.Discount ?? r.discount),
+            Quantity: tryParseNumber(r.Quantity ?? r.quantity),
+            Region: r.Region ?? r.region ?? 'Unknown',
+            Category: r.Category ?? r.category ?? 'Unknown',
+            SubCategory: r['Sub-Category'] ?? r.sub_category ?? r.SubCategory ?? 'Unknown',
+            CustomerName: r['Customer Name'] ?? r.customer_name ?? r.CustomerName ?? null,
+            OrderID: r['Order ID'] ?? r.order_id ?? r.OrderID ?? ('__order_'+idx)
+          });
+        }).filter(r=>r.__parsedDate);
+
+        // build filters
+        populateFilters(rawData);
+        applyFilters();
+      }catch(err){
+        alert('Failed to parse JSON: '+err.message);
+      }
+    });
+
+    resetBtn.addEventListener('click',()=>{ activeFilters={year:'all',segment:'all',region:null}; yearFilter.value='all'; segmentFilter.value='all'; applyFilters(); });
+
+    yearFilter.addEventListener('change',()=>{ activeFilters.year=yearFilter.value; applyFilters(); });
+    segmentFilter.addEventListener('change',()=>{ activeFilters.segment=segmentFilter.value; applyFilters(); });
+
+    function populateFilters(data){
+      const years = Array.from(new Set(data.map(d=>d.__parsedDate.getFullYear()))).sort();
+      yearFilter.innerHTML = '<option value="all">All years</option>' + years.map(y=>`<option value="${y}">${y}</option>`).join('');
+      const segments = Array.from(new Set(data.map(d=>d.Segment ?? d.segment ?? 'Unknown'))).sort();
+      segmentFilter.innerHTML = '<option value="all">All segments</option>' + segments.map(s=>`<option value="${s}">${s}</option>`).join('');
+      infoEl.textContent = `Loaded ${data.length} records — years: ${years.join(', ')} — segments: ${segments.join(', ')}`;
+    }
+
+    function applyFilters(){
+      filtered = rawData.filter(r=>{
+        if(activeFilters.year!=='all' && String(r.__parsedDate.getFullYear())!==String(activeFilters.year)) return false;
+        if(activeFilters.segment!=='all' && (r.Segment ?? r.segment) !== activeFilters.segment) return false;
+        if(activeFilters.region && (r.Region ?? r.region) !== activeFilters.region) return false;
+        return true;
+      });
+      renderAll();
+    }
+
+    // Aggregations
+    function sum(arr,fn){return arr.reduce((s,x)=>s+fn(x),0)}
+
+    function renderAll(){
+      renderKPIs();
+      renderTimeSeries();
+      renderRegionPie();
+      renderCategoryTreemap();
+      renderSegmentPie();
+      renderTopCustomers();
+      renderDiscountScatter();
+    }
+
+    function renderKPIs(){
+      const totalSales = sum(filtered,d=>d.Sales);
+      const totalProfit = sum(filtered,d=>d.Profit);
+      const orders = new Set(filtered.map(d=>d.OrderID)).size;
+      const margin = totalSales? (totalProfit/totalSales*100):0;
+      document.getElementById('totalSales').textContent = totalSales.toLocaleString(undefined,{style:'currency',currency:'USD',maximumFractionDigits:2});
+      document.getElementById('totalProfit').textContent = totalProfit.toLocaleString(undefined,{style:'currency',currency:'USD',maximumFractionDigits:2});
+      document.getElementById('profitMargin').textContent = margin.toFixed(1)+'%';
+      document.getElementById('totalOrders').textContent = orders;
+    }
+
+    function renderTimeSeries(){
+      // Group by month
+      const map = new Map();
+      for(const r of filtered){
+        const d = r.__parsedDate;
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        if(!map.has(key)) map.set(key,{date:new Date(d.getFullYear(),d.getMonth(),1),sales:0,profit:0});
+        const m = map.get(key);
+        m.sales+=r.Sales; m.profit+=r.Profit;
+      }
+      const arr = Array.from(map.values()).sort((a,b)=>a.date-b.date);
+      const x = arr.map(a=>a.date);
+      const sales = arr.map(a=>a.sales);
+      const profit = arr.map(a=>a.profit);
+      const layout = {margin:{t:30,l:40,r:20,b:40},title:'Sales & Profit Over Time',paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)'};
+      const data = [
+        {x,y:sales,name:'Sales',type:'scatter',mode:'lines+markers',hovertemplate:'%{x|%b %Y}<br>Sales: $%{y:.2f}<extra></extra>'},
+        {x,y:profit,name:'Profit',type:'scatter',mode:'lines+markers',hovertemplate:'%{x|%b %Y}<br>Profit: $%{y:.2f}<extra></extra>'}
+      ];
+      Plotly.newPlot('timeSeries',data,layout,{responsive:true});
+    }
+
+    function renderRegionPie(){
+      const byRegion = {};
+      for(const r of filtered){ const reg = r.Region || 'Unknown'; byRegion[reg]=(byRegion[reg]||0)+r.Sales; }
+      const labels = Object.keys(byRegion).sort((a,b)=>byRegion[b]-byRegion[a]);
+      const values = labels.map(l=>byRegion[l]);
+      const data = [{labels,values,type:'pie',textinfo:'percent+label',hovertemplate:'%{label}: $%{value:.2f} (%{percent})<extra></extra>'}];
+      const layout = {title:'Sales Share by Region',margin:{t:30,b:10}};
+      Plotly.newPlot('regionPie',data,layout,{responsive:true});
+
+      const regionPie = document.getElementById('regionPie');
+      regionPie.on('plotly_click',function(ev){
+        const label = ev.points && ev.points[0] && ev.points[0].label;
+        if(label){ activeFilters.region = label; applyFilters(); }
+      });
+    }
+
+    function renderCategoryTreemap(){
+      // Use treemap with path [Category, SubCategory]
+      const mapAgg = {};
+      for(const r of filtered){ const c=r.Category||'Unknown'; const s=r.SubCategory||r['Sub-Category']||'Unknown'; const key=c+'||'+s; mapAgg[key]=(mapAgg[key]||0)+r.Sales; }
+      const labels=[],parents=[],values=[];
+      const catMap = {};
+      for(const k of Object.keys(mapAgg)){
+        const [c,s]=k.split('||');
+        catMap[c]=catMap[c]||0; catMap[c]+=mapAgg[k];
+      }
+      for(const c of Object.keys(catMap)){
+        labels.push(c); parents.push(''); values.push(catMap[c]);
+      }
+      for(const k of Object.keys(mapAgg)){
+        const [c,s]=k.split('||'); labels.push(s); parents.push(c); values.push(mapAgg[k]);
+      }
+      const data=[{type:'treemap',labels:labels,parents:parents,values:values,hovertemplate:'%{label}<br>Sales: $%{value:.2f}<extra></extra>'}];
+      const layout={title:'Sales by Category / Sub-Category',margin:{t:30}};
+      Plotly.newPlot('categoryTreemap',data,layout,{responsive:true});
+    }
+
+    function renderSegmentPie(){
+      const bySeg = {};
+      for(const r of filtered){ const seg = r.Segment || 'Unknown'; bySeg[seg]=(bySeg[seg]||0)+r.Sales; }
+      const labels = Object.keys(bySeg); const values = labels.map(l=>bySeg[l]);
+      const data=[{labels,values,type:'pie',textinfo:'label+percent',hovertemplate:'%{label}: $%{value:.2f} (%{percent})<extra></extra>'}];
+      const layout={title:'Sales by Segment',margin:{t:30}};
+      Plotly.newPlot('segmentPie',data,layout,{responsive:true});
+    }
+
+    function renderTopCustomers(){
+      const byCust = {};
+      for(const r of filtered){ const c = r.CustomerName || 'Unknown'; byCust[c]=(byCust[c]||0)+r.Sales; }
+      const items = Object.entries(byCust).sort((a,b)=>b[1]-a[1]).slice(0,10);
+      const names = items.map(a=>a[0]); const sales = items.map(a=>a[1]);
+      const data=[{x:sales,y:names,type:'bar',orientation:'h',hovertemplate:'%{y}<br>Sales: $%{x:.2f}<extra></extra>'}];
+      const layout={title:'Top 10 Customers by Sales',margin:{t:30,l:150}};
+      Plotly.newPlot('topCustomers',data,layout,{responsive:true});
+    }
+
+    function renderDiscountScatter(){
+      const xs=[],ys=[],labels=[];
+      for(const r of filtered){ const d = r.Discount; if(isNaN(d)) continue; xs.push(d); ys.push(r.Profit); labels.push(r.ProductName || r['Product Name'] || r.Category || 'Item'); }
+      const data=[{x:xs,y:ys,mode:'markers',type:'scatter',marker:{size:8},text:labels,hovertemplate:'Discount: %{x}<br>Profit: $%{y:.2f}<br>%{text}<extra></extra>'}];
+      const layout={title:'Discount vs. Profit',xaxis:{title:'Discount'},yaxis:{title:'Profit'},margin:{t:30}};
+      Plotly.newPlot('discountScatter',data,layout,{responsive:true});
+    }
+
+    // initial blank plots
+    Plotly.newPlot('timeSeries',[],{title:'Waiting for data'},{responsive:true});
+    Plotly.newPlot('regionPie',[],{title:'Waiting for data'},{responsive:true});
+    Plotly.newPlot('categoryTreemap',[],{title:'Waiting for data'},{responsive:true});
+    Plotly.newPlot('segmentPie',[],{title:'Waiting for data'},{responsive:true});
+    Plotly.newPlot('topCustomers',[],{title:'Waiting for data'},{responsive:true});
+    Plotly.newPlot('discountScatter',[],{title:'Waiting for data'},{responsive:true});
+
+  </script>
+</body>
+</html>

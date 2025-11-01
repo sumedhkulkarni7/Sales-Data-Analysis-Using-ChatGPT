@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interactive Sales Dashboard - Icy Blue Theme</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Poppins', sans-serif;
+      background: linear-gradient(135deg, #e0f7ff 0%, #b2ebff 100%);
+      color: #0b1a2a;
+      padding: 2%;
+    }
+
+    .dashboard {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-color: rgba(255, 255, 255, 0.5);
+      border-radius: 15px;
+      padding: 1rem 2rem;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    .upload-btn {
+      background: #b2ebff;
+      border: none;
+      border-radius: 10px;
+      padding: 0.5rem 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: #0b1a2a;
+      transition: all 0.3s ease;
+    }
+
+    .upload-btn:hover {
+      background: #9de0ff;
+    }
+
+    .charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 2rem;
+      padding: 1rem 5%;
+    }
+
+    .chart-card {
+      background: rgba(255, 255, 255, 0.65);
+      border-radius: 15px;
+      padding: 1rem;
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      padding: 1rem 5%;
+    }
+
+    .kpi {
+      background: rgba(255, 255, 255, 0.75);
+      border-radius: 15px;
+      padding: 1rem;
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    .kpi .value {
+      font-size: 1.5rem;
+      font-weight: bold;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 2rem;
+      color: #0b1a2a;
+      font-size: 0.9rem;
+      opacity: 0.8;
+    }
+  </style>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+  <div class="dashboard">
+    <div class="header">
+      <h1>Sales Performance Dashboard</h1>
+      <label class="upload-btn">
+        Upload JSON File
+        <input id="file" type="file" accept="application/json" style="display:none;">
+      </label>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div>Total Sales</div><div class="value" id="totalSales">-</div></div>
+      <div class="kpi"><div>Total Profit</div><div class="value" id="totalProfit">-</div></div>
+      <div class="kpi"><div>Profit Margin</div><div class="value" id="profitMargin">-</div></div>
+      <div class="kpi"><div>Total Orders</div><div class="value" id="totalOrders">-</div></div>
+    </div>
+
+    <div class="charts">
+      <div class="chart-card" id="timeSeries"></div>
+      <div class="chart-card" id="regionPie"></div>
+      <div class="chart-card" id="categoryTreemap"></div>
+      <div class="chart-card" id="segmentPie"></div>
+      <div class="chart-card" id="discountScatter"></div>
+    </div>
+
+    <footer>© 2025 Icy Blue Sales Dashboard • Built with Plotly.js</footer>
+  </div>
+
+  <script>
+    let rawData = [];
+
+    document.getElementById('file').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      rawData = JSON.parse(text);
+      renderDashboard();
+    });
+
+    function sum(arr, key) { return arr.reduce((acc, r) => acc + (parseFloat(r[key]) || 0), 0); }
+
+    function renderDashboard() {
+      const totalSales = sum(rawData, 'Sales');
+      const totalProfit = sum(rawData, 'Profit');
+      const profitMargin = (totalProfit / totalSales) * 100 || 0;
+      const totalOrders = new Set(rawData.map(r => r["Order ID"])).size;
+
+      document.getElementById('totalSales').textContent = totalSales.toFixed(2);
+      document.getElementById('totalProfit').textContent = totalProfit.toFixed(2);
+      document.getElementById('profitMargin').textContent = profitMargin.toFixed(2) + '%';
+      document.getElementById('totalOrders').textContent = totalOrders;
+
+      renderCharts();
+    }
+
+    function renderCharts() {
+      const salesByDate = {};
+      rawData.forEach(r => {
+        const date = new Date(r["Order Date"]);
+        const month = date.getFullYear() + '-' + (date.getMonth() + 1);
+        salesByDate[month] = (salesByDate[month] || 0) + (parseFloat(r["Sales"]) || 0);
+      });
+
+      const x = Object.keys(salesByDate);
+      const y = Object.values(salesByDate);
+
+      Plotly.newPlot('timeSeries', [{x, y, type:'scatter', mode:'lines+markers', name:'Sales'}], 
+        {title:'Sales Over Time', paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)'});
+
+      const regions = {};
+      rawData.forEach(r => regions[r.Region] = (regions[r.Region] || 0) + (parseFloat(r["Sales"]) || 0));
+      Plotly.newPlot('regionPie', [{type:'pie', labels:Object.keys(regions), values:Object.values(regions)}], 
+        {title:'Sales by Region'});
+
+      const cats = rawData.map(r=>r.Category);
+      const subs = rawData.map(r=>r["Sub-Category"]);
+      const vals = rawData.map(r=>r.Sales);
+      Plotly.newPlot('categoryTreemap', [{type:'treemap', labels:subs, parents:cats, values:vals}], 
+        {title:'Sales by Category/Sub-Category'});
+
+      const segments = {};
+      rawData.forEach(r => segments[r.Segment] = (segments[r.Segment] || 0) + (parseFloat(r["Sales"]) || 0));
+      Plotly.newPlot('segmentPie', [{type:'pie', labels:Object.keys(segments), values:Object.values(segments)}], 
+        {title:'Sales by Segment'});
+
+      Plotly.newPlot('discountScatter', [{x:rawData.map(r=>r.Discount), y:rawData.map(r=>r.Profit), mode:'markers', type:'scatter'}], 
+        {title:'Discount vs Profit'});
+    }
+  </script>
+</body>
+</html>

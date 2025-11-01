@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interactive Sales Performance Dashboard - Glassmorphism (10%)</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Poppins', sans-serif;
+      background: linear-gradient(135deg, #e0f7ff 0%, #b2ebff 100%);
+      color: #0b1a2a;
+      padding: 2%;
+      backdrop-filter: blur(10px);
+    }
+
+    .dashboard {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.3);
+      box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 20px;
+      padding: 1rem 2rem;
+      color: #0b1a2a;
+    }
+
+    .upload {
+      background: rgba(255, 255, 255, 0.2);
+      padding: 0.5rem 1rem;
+      border-radius: 12px;
+      border: none;
+      color: #0b1a2a;
+      cursor: pointer;
+    }
+
+    .charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 2rem;
+      padding: 2rem 10%;
+    }
+
+    .chart-card {
+      background: rgba(255, 255, 255, 0.25);
+      box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 1rem;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      padding: 1rem 10%;
+    }
+
+    .kpi {
+      background: rgba(255, 255, 255, 0.25);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 15px;
+      padding: 1rem;
+      text-align: center;
+      color: #0b1a2a;
+    }
+
+    .kpi .value {
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 2rem;
+      color: #0b1a2a;
+      font-size: 0.9rem;
+      opacity: 0.7;
+    }
+  </style>
+  <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+</head>
+<body>
+  <div class="dashboard">
+    <div class="header">
+      <h1>Sales Performance Dashboard</h1>
+      <label class="upload">
+        Upload JSON File
+        <input id="file" type="file" accept="application/json" style="display:none;">
+      </label>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div>Total Sales</div><div class="value" id="totalSales">-</div></div>
+      <div class="kpi"><div>Total Profit</div><div class="value" id="totalProfit">-</div></div>
+      <div class="kpi"><div>Profit Margin</div><div class="value" id="profitMargin">-</div></div>
+      <div class="kpi"><div>Total Orders</div><div class="value" id="totalOrders">-</div></div>
+    </div>
+
+    <div class="charts">
+      <div class="chart-card" id="timeSeries"></div>
+      <div class="chart-card" id="regionPie"></div>
+      <div class="chart-card" id="categoryTreemap"></div>
+      <div class="chart-card" id="segmentPie"></div>
+      <div class="chart-card" id="topCustomers"></div>
+      <div class="chart-card" id="discountScatter"></div>
+    </div>
+
+    <footer>Glassmorphism Dashboard • Built with Plotly.js</footer>
+  </div>
+
+  <script>
+    let rawData = [];
+
+    document.getElementById('file').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      rawData = JSON.parse(text);
+      renderDashboard();
+    });
+
+    function sum(arr, key) { return arr.reduce((acc, r) => acc + (parseFloat(r[key]) || 0), 0); }
+
+    function renderDashboard() {
+      const totalSales = sum(rawData, 'Sales');
+      const totalProfit = sum(rawData, 'Profit');
+      const profitMargin = (totalProfit / totalSales) * 100 || 0;
+      const totalOrders = new Set(rawData.map(r => r["Order ID"])).size;
+
+      document.getElementById('totalSales').textContent = totalSales.toFixed(2);
+      document.getElementById('totalProfit').textContent = totalProfit.toFixed(2);
+      document.getElementById('profitMargin').textContent = profitMargin.toFixed(2) + '%';
+      document.getElementById('totalOrders').textContent = totalOrders;
+
+      renderCharts();
+    }
+
+    function renderCharts() {
+      const salesByDate = {};
+      rawData.forEach(r => {
+        const date = new Date(r["Order Date"]);
+        const month = date.getFullYear() + '-' + (date.getMonth() + 1);
+        salesByDate[month] = (salesByDate[month] || 0) + (parseFloat(r["Sales"]) || 0);
+      });
+
+      const x = Object.keys(salesByDate);
+      const y = Object.values(salesByDate);
+
+      Plotly.newPlot('timeSeries', [{x, y, type:'scatter', mode:'lines+markers', name:'Sales'}], {title:'Sales Over Time', paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)'});
+      Plotly.newPlot('regionPie', [{type:'pie', labels:rawData.map(r=>r.Region), values:rawData.map(r=>r.Sales)}], {title:'Sales by Region'});
+      Plotly.newPlot('categoryTreemap', [{type:'treemap', labels:rawData.map(r=>r["Sub-Category"]), parents:rawData.map(r=>r.Category), values:rawData.map(r=>r.Sales)}], {title:'Sales by Category/Sub-Category'});
+      Plotly.newPlot('segmentPie', [{type:'pie', labels:rawData.map(r=>r.Segment), values:rawData.map(r=>r.Sales)}], {title:'Sales by Segment'});
+      Plotly.newPlot('topCustomers', [{type:'bar', x:rawData.map(r=>r["Customer Name"]), y:rawData.map(r=>r.Sales)}], {title:'Top Customers'});
+      Plotly.newPlot('discountScatter', [{x:rawData.map(r=>r.Discount), y:rawData.map(r=>r.Profit), mode:'markers', type:'scatter'}], {title:'Discount vs Profit'});
+    }
+  </script>
+</body>
+</html>
